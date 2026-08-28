@@ -132,17 +132,36 @@ class Config:
 # --------------------------------------------------------------------------
 
 _LOG_PATH = None
+_LOG_BROKEN = False
 
 
 def log(msg):
+    """Log to stdout always, and to KSL_LOG when it is writable.
+
+    stdout is the reliable channel (`docker compose logs`); the file is the
+    convenience one. If the file cannot be written -- a NAS bind mount owned by
+    another user is the usual reason -- say so once on stdout instead of
+    failing silently, because "there is no log" with no explanation is a
+    genuinely confusing way to lose an afternoon.
+    """
+    global _LOG_BROKEN
     line = "[%s] %s" % (datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST"), msg)
     print(line, flush=True)
-    if _LOG_PATH:
-        try:
-            with open(_LOG_PATH, "a", encoding="utf-8") as fh:
-                fh.write(line + "\n")
-        except OSError:
-            pass
+    if not _LOG_PATH or _LOG_BROKEN:
+        return
+    try:
+        d = os.path.dirname(os.path.abspath(_LOG_PATH))
+        if d and not os.path.isdir(d):
+            os.makedirs(d, exist_ok=True)
+        with open(_LOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except OSError as e:
+        _LOG_BROKEN = True          # warn once, then stop retrying every line
+        print("[%s] WARNING: cannot write log file %s (%s) -- continuing with "
+              "stdout only. Check the directory exists and is writable by the "
+              "container (on a NAS this is usually bind-mount ownership)."
+              % (datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST"),
+                 _LOG_PATH, e), flush=True)
 
 
 # --------------------------------------------------------------------------

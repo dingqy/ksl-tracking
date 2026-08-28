@@ -1,0 +1,19 @@
+# systemd unit -- for NAS boxes that expose systemd (TrueNAS SCALE, UnRAID VM,
+# Debian/Ubuntu-based NAS, OMV). Copy to /etc/systemd/system/ksl-watch.service
+[Unit]
+Description=KSL 2026 Tokyo tixplus resale watcher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/ksl-watch
+EnvironmentFile=/opt/ksl-watch/config.env
+ExecStart=/usr/bin/python3 /opt/ksl-watch/ksl_watch.py --daemon
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

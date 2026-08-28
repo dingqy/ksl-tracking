@@ -1,0 +1,15 @@
+# Local config -- contains BARK_KEY and any other notification secrets.
+# Copy config.env.example -> config.env and fill it in on each machine.
+config.env
+config.env.local
+
+# Runtime state
+data/
+state.json
+state.json.tmp
+state.cookies
+sim_state.json
+*.log
+
+__pycache__/
+*.pyc

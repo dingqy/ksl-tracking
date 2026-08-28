@@ -1,0 +1,22 @@
+services:
+  ksl-watch:
+    build: .
+    image: ksl-watch:latest
+    container_name: ksl-watch
+    restart: unless-stopped
+    # config.env supplies KSL_* and the notification keys (BARK_KEY etc.)
+    env_file: config.env
+    environment:
+      # these win over config.env, so the container always uses its own volume
+      TZ: Asia/Tokyo
+      KSL_STATE: /data/state.json
+      KSL_LOG: /data/ksl.log
+    volumes:
+      - ./data:/data
+    command: ["--daemon"]
+    stop_grace_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

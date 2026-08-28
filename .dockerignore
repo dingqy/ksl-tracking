@@ -1,0 +1,12 @@
+data/
+state.json
+state.json.tmp
+state.cookies
+sim_state.json
+*.log
+__pycache__/
+*.pyc
+test_alerts.py
+README.md
+ksl-watch.service
+run.sh

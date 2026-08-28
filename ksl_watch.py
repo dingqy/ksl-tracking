@@ -105,6 +105,8 @@ class Config:
         self.stagger_max = _env_int("KSL_STAGGER_MAX", 45)
         # how late a scheduled sweep may be before --healthcheck fails
         self.health_grace = _env_int("KSL_HEALTH_GRACE_SEC", 120)
+        # delivery attempts per notification channel before giving up
+        self.notify_retries = max(1, _env_int("KSL_NOTIFY_RETRIES", 3))
         self.state_file = args.state or _env(
             "KSL_STATE",
             os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.json"))
@@ -543,21 +545,47 @@ NOTIFIERS = [
 ]
 
 
+def _send_once(name, fn, title, body, url, level, attempts):
+    """Deliver through one channel, retrying transient failures.
+
+    Without this a single blip -- a dropped connection, a 429 from the push
+    service -- silently loses the alert, and the whole point of the watcher is
+    the one notification that matters.
+    """
+    for i in range(attempts):
+        try:
+            return fn(title, body, url, level)
+        except Exception as e:                      # noqa: BLE001
+            if i == attempts - 1:
+                raise
+            log("notify %s attempt %d/%d failed (%s) -- retrying"
+                % (name, i + 1, attempts, e))
+            time.sleep(2 * (i + 1) + random.uniform(0, 1))
+
+
 def notify(title, body, url, cfg, level="normal"):
     log("ALERT [%s]: %s" % (level, title))
     log(body)
     if cfg.dry_run:
         log("(dry-run: notifications suppressed)")
         return
-    sent = []
+    sent, failed = [], []
     for name, fn in NOTIFIERS:
         try:
-            if fn(title, body, url, level):
+            if _send_once(name, fn, title, body, url, level, cfg.notify_retries):
                 sent.append(name)
         except Exception as e:                      # noqa: BLE001
-            log("notify %s FAILED: %s" % (name, e))
+            failed.append(name)
+            log("notify %s FAILED after %d attempts: %s"
+                % (name, cfg.notify_retries, e))
     if sent:
         log("notified via: %s" % ", ".join(sent))
+    elif failed:
+        # Distinct from "nothing configured" on purpose -- conflating the two
+        # sends you hunting for a missing config when the key is fine and
+        # delivery is what broke.
+        log("ERROR: alert NOT delivered -- every configured channel failed (%s)"
+            % ", ".join(failed))
     else:
         log("WARNING: no notification channel configured -- alert only in log")
 
@@ -786,14 +814,19 @@ def check(cfg, state, announce=True):
     warned = state.setdefault("deadline_warned", [])
     if end:
         left_h = (end - now).total_seconds() / 3600.0
-        for h in sorted(cfg.deadline_warn_hours, reverse=True):
-            if 0 < left_h <= h and h not in warned:
-                warned.append(h)
-                notify("KSL 2026 Tokyo: ~%dh until the apply deadline" % h,
-                       "%s\n\n%s\n\nDo not miss the final draw." % (
-                           deadline_line(apply_end), stock_line),
-                       url, cfg, level="urgent" if h <= 6 else "normal")
-                break
+        # Every threshold we are now inside of. A watcher started (or a state
+        # file wiped) late is under several at once -- mark them all, report the
+        # ACTUAL time left, and pick the level from that. Keying the title or
+        # the level off the threshold instead would announce "~72h" with four
+        # hours to go, and send the final-chance warning silently.
+        crossed = [h for h in cfg.deadline_warn_hours
+                   if 0 < left_h <= h and h not in warned]
+        if crossed:
+            warned.extend(crossed)
+            notify("KSL 2026 Tokyo: apply deadline in ~%dh" % max(1, round(left_h)),
+                   "%s\n\n%s\n\nDo not miss the final draw." % (
+                       deadline_line(apply_end), stock_line),
+                   url, cfg, level="urgent" if left_h <= 6 else "normal")
 
     state["last_ok"] = now_iso
     state["last_summary"] = [{"seat": r["seat_type"], "total": r["total"],

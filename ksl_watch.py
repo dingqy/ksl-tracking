@@ -756,12 +756,18 @@ def check(cfg, state, announce=True):
                 seats_prev[r["id"]]["last_alert"] = now_iso
 
     # ---- secondary alert: listed, but below the requirement ----------------
-    elif news and cfg.notify_low:
+    #
+    # Deliberately NOT `elif`. A matching seat type that is sitting inside its
+    # repeat window produces no alert this sweep, and an `elif` would let that
+    # silence swallow a genuinely new listing on a *different* seat type. The
+    # matching rows are filtered out instead, so nothing is reported twice.
+    news_low = [r for r in news if not matches(r, cfg)]
+    if news_low and cfg.notify_low:
         notify("KSL 2026 Tokyo: %s (below your target)"
                % ("watcher started, baseline inventory" if cold
                   else "listing appeared"),
                "%s\n\n%s\n\n%s" % (
-                   "\n".join(fmt_row(r) for r in news),
+                   "\n".join(fmt_row(r) for r in news_low),
                    deadline_line(apply_end),
                    "Not enough for %d seats together. Decide whether to apply for "
                    "singles or keep waiting for a %d-seat lot." % (cfg.want, cfg.want)),

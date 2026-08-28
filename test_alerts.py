@@ -50,6 +50,12 @@ SCENES = [
     ("A席 standing enters trade too",      [(S, "S席", 28600, 2, [1, 2]),
                                             (A, "A席", 15400, 3, [1, 2, 3])], "urgent"),
     ("everything delisted",                [],                                "normal"),
+    # regression: a match inside its repeat window must not silence a NEW
+    # below-target listing on a different seat type
+    ("S席 2-lot back (urgent)",            [(S, "S席", 28600, 2, [1, 2])],    "urgent"),
+    ("no change -> S席 suppressed",        [(S, "S席", 28600, 2, [1, 2])],    None),
+    ("A席 newly listed while S席 muted",   [(S, "S席", 28600, 2, [1, 2]),
+                                            (A, "A席", 15400, 1, [1])],       "normal"),
 ]
 
 state, cur, fired = {}, [None], []

@@ -56,7 +56,12 @@ every daily draw until 9/18.
   - **new listing** below your target (so you can decide on singles)
   - **stock increase** / lot-size change (e.g. `1枚` → `1枚/2枚`)
   - **new seat type** entering the trade pool (SS席 / A席 / 車椅子席)
-  - stock disappearing, or trade status changing (トレード中 → トレード終了)
+  - stock disappearing, or trade status changing (トレード中 → トレード終了).
+    Note tixplus does **not** report a sold-out seat type as `total: 0` — it
+    drops the entry from `member_precedes` altogether, so a delisting is
+    inferred from the row vanishing. This also matters for the *reverse*
+    case: without it, stale state would silence a listing that reappears
+    with identical numbers.
   - **72 h / 24 h / 3 h before the apply deadline**
   - **10 consecutive failed polls** — so a silently broken monitor gets noticed
 - Edge-triggered with a 30-minute re-nag: you get told once, not 1,440 times a day

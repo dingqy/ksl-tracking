@@ -107,6 +107,10 @@ class Config:
         self.health_grace = _env_int("KSL_HEALTH_GRACE_SEC", 120)
         # delivery attempts per notification channel before giving up
         self.notify_retries = max(1, _env_int("KSL_NOTIFY_RETRIES", 3))
+        # passive "still alive" push every N hours (0 = off). For an
+        # unattended three-week run, silence is ambiguous: nothing listed
+        # and process dead look identical from the outside.
+        self.heartbeat_hours = _env_int("KSL_HEARTBEAT_HOURS", 24)
         self.state_file = args.state or _env(
             "KSL_STATE",
             os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.json"))
@@ -808,11 +812,22 @@ def check(cfg, state, announce=True):
     # repeat window produces no alert this sweep, and an `elif` would let that
     # silence swallow a genuinely new listing on a *different* seat type. The
     # matching rows are filtered out instead, so nothing is reported twice.
+    # ---- startup confirmation ----------------------------------------------
+    # Unconditional, including when nothing is listed. Deploying to a NAS with
+    # an empty pool otherwise produces total silence, which is indistinguishable
+    # from a broken deploy -- and on Synology the GUI log tab often shows
+    # nothing for compose projects, so there is no easy second opinion.
+    if cold:
+        notify("KSL watcher started",
+               "Watching for %d seat(s) together (mode=%s), sweeping every "
+               "%d-%ds.\n\n%s\n\n%s"
+               % (cfg.want, cfg.mode, cfg.interval_min, cfg.interval_max,
+                  stock_line, deadline_line(apply_end)),
+               url, cfg, level="passive")
+
     news_low = [r for r in news if not matches(r, cfg)]
-    if news_low and cfg.notify_low:
-        notify("KSL 2026 Tokyo: %s (below your target)"
-               % ("watcher started, baseline inventory" if cold
-                  else "listing appeared"),
+    if news_low and cfg.notify_low and not cold:
+        notify("KSL 2026 Tokyo: listing appeared (below your target)",
                "%s\n\n%s\n\n%s" % (
                    "\n".join(fmt_row(r) for r in news_low),
                    deadline_line(apply_end),
@@ -847,6 +862,17 @@ def check(cfg, state, announce=True):
                        deadline_line(apply_end), stock_line),
                    url, cfg, level="urgent" if left_h <= 6 else "normal")
 
+    # ---- periodic proof of life ---------------------------------------
+    if cfg.heartbeat_hours > 0:
+        last_hb = parse_jst_iso(state.get("last_heartbeat"))
+        if last_hb is None or (now - last_hb) >= timedelta(
+                hours=cfg.heartbeat_hours):
+            if last_hb is not None:      # never on the very first sweep
+                notify("KSL watcher: still running",
+                       "%s\n\n%s" % (stock_line, deadline_line(apply_end)),
+                       url, cfg, level="passive")
+            state["last_heartbeat"] = now_iso
+
     state["last_ok"] = now_iso
     state["last_summary"] = [{"seat": r["seat_type"], "total": r["total"],
                               "serial": r["serial"]} for r in listed]
@@ -873,6 +899,65 @@ def pick_pause(cfg):
         gap += extra
     log("next sweep in %.0fs" % gap)
     return gap
+
+
+def _ago(delta):
+    s = int(abs(delta.total_seconds()))
+    if s < 60:
+        return "%ds" % s
+    if s < 3600:
+        return "%dm%02ds" % (s // 60, s % 60)
+    if s < 86400:
+        return "%dh%02dm" % (s // 3600, (s % 3600) // 60)
+    return "%dd%02dh" % (s // 86400, (s % 86400) // 3600)
+
+
+def cmd_status(cfg):
+    """Human answer to 'is it actually running?', read from the state file.
+
+    Deliberately independent of the log: logs can be unreadable (unwritable
+    mount, wrong compose project, a NAS GUI that hides stdout) while the
+    watcher is perfectly healthy, and that combination is indistinguishable
+    from being dead unless something reports state directly.
+    """
+    state = load_state(cfg.state_file)
+    now = datetime.now(JST)
+    print("state file : %s" % cfg.state_file)
+    if not state:
+        print("status     : NO STATE -- no sweep has completed yet")
+        print("             (fresh start? wrong KSL_STATE path? check the logs)")
+        return 1
+
+    last = parse_jst_iso(state.get("last_ok"))
+    due = parse_jst_iso(state.get("next_due"))
+    if last:
+        print("last sweep : %s  (%s ago)"
+              % (last.strftime("%Y-%m-%d %H:%M:%S"), _ago(now - last)))
+    if due:
+        d = due - now
+        print("next sweep : %s  (%s %s)"
+              % (due.strftime("%Y-%m-%d %H:%M:%S"), _ago(d),
+                 "from now" if d.total_seconds() > 0 else "OVERDUE"))
+        late = (now - due).total_seconds()
+        print("status     : %s" % ("RUNNING" if late <= cfg.health_grace
+                                   else "STALLED (%s overdue)" % _ago(d)))
+    else:
+        print("status     : ran in --once mode (no daemon schedule recorded)")
+
+    if state.get("fail_streak"):
+        print("failures   : %s consecutive failed sweeps" % state["fail_streak"])
+    summary = state.get("last_summary") or []
+    if summary:
+        print("inventory  :")
+        for r in summary:
+            print("   %s  在庫%d枚  申込可能枚数:%s"
+                  % (r.get("seat"), r.get("total", 0),
+                     "/".join("%d枚" % s for s in r.get("serial") or []) or "-"))
+    else:
+        print("inventory  : nothing listed for trade right now")
+    print("watching   : tours=%s want=%d mode=%s"
+          % (",".join(cfg.tour_ids), cfg.want, cfg.mode))
+    return 0
 
 
 def cmd_healthcheck(cfg):
@@ -930,6 +1015,8 @@ def main():
     g.add_argument("--daemon", action="store_true", help="loop forever")
     g.add_argument("--print", dest="show", action="store_true", help="dump inventory")
     g.add_argument("--test-notify", action="store_true", help="send a test alert")
+    g.add_argument("--status", action="store_true",
+                   help="print whether the watcher is alive and what it sees")
     g.add_argument("--healthcheck", action="store_true",
                    help="exit 0 if the daemon is on schedule, 1 if stalled")
     ap.add_argument("--tours", help="comma-separated tour ids (default 14584)")
@@ -957,6 +1044,9 @@ def main():
                "%s/artists/tour/%s" % (BASE, cfg.tour_ids[0]), cfg,
                level="normal")
         return 0
+
+    if args.status:
+        return cmd_status(cfg)
 
     if args.healthcheck:
         return cmd_healthcheck(cfg)

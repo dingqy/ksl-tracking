@@ -11,7 +11,11 @@ K.notify = lambda t, b, u, c, level="normal": fired.append((level, t))
 
 
 def run(hours_left, warned=None):
-    cfg_state = {"deadline_warned": list(warned or [])}
+    # "seats" present => not a cold start. A deadline warning only ever
+    # happens on a watcher that has been running a while, and a cold
+    # start legitimately emits its own startup notice first.
+    cfg_state = {"deadline_warned": list(warned or []), "seats": {},
+                 "concerts": {}}
     end = (datetime.now(K.JST) + timedelta(hours=hours_left))
     K.fetch_tour = lambda tid, st, c: {"props": {"concertList": {"14584_1": {
         "concert": {"title": "豊洲PIT", "place": "東京",

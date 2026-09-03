@@ -118,8 +118,10 @@ class Config:
                                 os.path.splitext(self.state_file)[0] + ".cookies")
         self.log_file = _env("KSL_LOG")
         self.timeout = _env_int("KSL_TIMEOUT", 20)
-        # re-alert every N minutes while an opportunity is still open (0 = never repeat)
-        self.repeat_min = _env_int("KSL_REPEAT_MIN", 30)
+        # Re-nag every N minutes while a match is still listed. 0 (default)
+        # = ring once per episode; the alarm re-arms only when the listing
+        # goes away, so a standing listing never nags.
+        self.repeat_min = _env_int("KSL_REPEAT_MIN", 0)
         # alert after this many consecutive failed polls
         self.fail_alert_after = _env_int("KSL_FAIL_ALERT_AFTER", 10)
         # hours-before-deadline warnings
@@ -732,7 +734,10 @@ def check(cfg, state, announce=True):
             # row itself disappears from the payload
             "seat_type": row["seat_type"], "venue": row["venue"],
             "date": row["date"], "seen": now_iso,
-            "last_alert": prev.get("last_alert") if prev else None,
+            # Clearing the latch the moment it stops matching is what arms the
+            # next alarm. Carried over only while it still matches.
+            "last_alert": ((prev.get("last_alert") if prev else None)
+                           if hit else None),
         }
 
     # Seat types that vanished from the payload entirely.
@@ -760,7 +765,9 @@ def check(cfg, state, announce=True):
                            % (prev.get("seat_type", "?"),
                               " (%s)" % where if where else "",
                               prev.get("total", 0))))
-        seats_prev[rid] = dict(prev, total=0, serial=[], hit=False, seen=now_iso)
+        # last_alert=None re-arms the alarm: if this listing comes back, it rings.
+        seats_prev[rid] = dict(prev, total=0, serial=[], hit=False,
+                               last_alert=None, seen=now_iso)
 
     for m in all_meta:
         prev = conc_prev.get(m["key"]) or {}
@@ -783,15 +790,19 @@ def check(cfg, state, announce=True):
 
     # ---- primary alert: requirement satisfied ------------------------------
     if hits:
+        # One alarm per episode. `last_alert` is the latch: it is set when we
+        # ring, and cleared the moment the seat type stops matching (below, and
+        # in the delisting pass). So a listing that stays up does not nag, a
+        # listing that grows 2 -> 3 does not re-ring, and a listing that goes
+        # away and comes back rings again -- which is the case that matters.
+        # KSL_REPEAT_MIN > 0 opts back into periodic re-nagging.
         due = []
         for r in hits:
-            st = seats_prev[r["id"]]
-            last = parse_jst_iso(st.get("last_alert"))
-            fresh = any(e[0] in ("HIT", "NEW", "UP", "SERIAL") and e[1] is not None
-                        and e[1]["id"] == r["id"] for e in events)
-            stale = (cfg.repeat_min and last is not None and
-                     (now - last) >= timedelta(minutes=cfg.repeat_min))
-            if fresh or last is None or stale:
+            last = parse_jst_iso(seats_prev[r["id"]].get("last_alert"))
+            if last is None:
+                due.append(r)
+            elif cfg.repeat_min and (now - last) >= timedelta(
+                    minutes=cfg.repeat_min):
                 due.append(r)
         if due:
             title = ("KSL 2026 Tokyo: %d ticket%s available -- APPLY NOW"

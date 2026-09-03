@@ -56,6 +56,15 @@ SCENES = [
     ("no change -> S席 suppressed",        [(S, "S席", 28600, 2, [1, 2])],    None),
     ("A席 newly listed while S席 muted",   [(S, "S席", 28600, 2, [1, 2]),
                                             (A, "A席", 15400, 1, [1])],       "normal"),
+    # one alarm per episode: ring once, stay quiet while it is up, re-arm only
+    # after the listing goes away
+    ("reset: everything gone",             [],                                "normal"),
+    ("2-lot appears -> ring once",         [(S, "S席", 28600, 2, [1, 2])],    "urgent"),
+    ("still up -> silence",                [(S, "S席", 28600, 2, [1, 2])],    None),
+    ("still up, stock 2->3 -> silence",    [(S, "S席", 28600, 3, [1, 2, 3])], None),
+    ("still up much later -> silence",     [(S, "S席", 28600, 3, [1, 2, 3])], None),
+    ("listing disappears -> re-arms",      [],                                "normal"),
+    ("comes back -> rings AGAIN",          [(S, "S席", 28600, 2, [1, 2])],    "urgent"),
 ]
 
 state, cur, fired = {}, [None], []

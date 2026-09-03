@@ -64,7 +64,10 @@ every daily draw until 9/18.
     with identical numbers.
   - **72 h / 24 h / 3 h before the apply deadline**
   - **10 consecutive failed polls** — so a silently broken monitor gets noticed
-- Edge-triggered with a 30-minute re-nag: you get told once, not 1,440 times a day
+- **One alarm per listing.** It rings when a match appears, stays quiet for as
+  long as that listing is up (even if the stock grows), and re-arms only once
+  the listing disappears -- so a ticket that comes back rings again.
+  `KSL_REPEAT_MIN=30` opts back into periodic re-nagging.
 - Every alert carries the countdown to the next 12:00 draw and to the 9/18 deadline
 - Survives the site changing its Inertia asset version (409 → refetches, recovers)
 - Python **standard library only** — no `pip install` on the NAS

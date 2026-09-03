@@ -114,6 +114,8 @@ class Config:
         self.state_file = args.state or _env(
             "KSL_STATE",
             os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.json"))
+        self.ack_file = _env("KSL_ACKS",
+                             os.path.splitext(self.state_file)[0] + ".ack.json")
         self.cookie_file = _env("KSL_COOKIES",
                                 os.path.splitext(self.state_file)[0] + ".cookies")
         self.log_file = _env("KSL_LOG")
@@ -619,6 +621,36 @@ def notify(title, body, url, cfg, level="normal"):
 # state
 # --------------------------------------------------------------------------
 
+def load_acks(path):
+    """Acknowledged seat types: 'I already applied for this, stop telling me.'
+
+    Kept in its own file rather than inside state.json on purpose. The daemon
+    holds state in memory and rewrites it every sweep, so an --ack run in a
+    separate process would simply be clobbered on the next save. The daemon
+    only ever reads this file, so there is nothing to race with.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_acks(path, acks):
+    try:
+        d = os.path.dirname(os.path.abspath(path))
+        if d and not os.path.isdir(d):
+            os.makedirs(d, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(acks, fh, ensure_ascii=False, indent=1)
+        os.replace(tmp, path)
+        return True
+    except OSError as e:
+        log("ERROR: cannot write ack file %s (%s)" % (path, e))
+        return False
+
+
 def load_state(path):
     try:
         with open(path, encoding="utf-8") as fh:
@@ -656,6 +688,7 @@ def save_state(path, state):
 
 def check(cfg, state, announce=True):
     cold = "seats" not in state          # first ever run / state file wiped
+    acks = load_acks(cfg.ack_file)       # re-read every sweep, never cached
     seats_prev = state.setdefault("seats", {})
     conc_prev = state.setdefault("concerts", {})
     now = datetime.now(JST)
@@ -798,6 +831,12 @@ def check(cfg, state, announce=True):
         # KSL_REPEAT_MIN > 0 opts back into periodic re-nagging.
         due = []
         for r in hits:
+            # Already applied for this one? Stay quiet -- unless a strictly
+            # bigger lot turns up than the one that was acknowledged, which is
+            # the only case where there is something new to act on.
+            a = acks.get(r["id"])
+            if a and max(r["serial"] or [0]) <= a.get("serial_max", 0):
+                continue
             last = parse_jst_iso(seats_prev[r["id"]].get("last_alert"))
             if last is None:
                 due.append(r)
@@ -923,6 +962,50 @@ def _ago(delta):
     return "%dd%02dh" % (s // 86400, (s % 86400) // 3600)
 
 
+def cmd_ack(cfg):
+    """Silence alerts for what is listed right now -- you have applied for it.
+
+    Records the lot size that was acknowledged, so a strictly bigger lot later
+    still rings. Anything smaller or equal is, from your side, old news.
+    """
+    state = load_state(cfg.state_file)
+    seats = state.get("seats") or {}
+    hits = {sid: s for sid, s in seats.items() if s.get("hit")}
+    if not hits:
+        print("nothing currently matching -- nothing to acknowledge")
+        print("(the watcher alerts on a lot of >= %d consecutive seats)"
+              % cfg.want)
+        return 1
+    acks = load_acks(cfg.ack_file)
+    now_iso = datetime.now(JST).isoformat()
+    for sid, s in hits.items():
+        smax = max(s.get("serial") or [0])
+        acks[sid] = {"serial_max": smax, "total": s.get("total", 0),
+                     "seat_type": s.get("seat_type"), "at": now_iso}
+        print("acknowledged: %s  (在庫%d枚, 申込可能枚数 up to %d枚)"
+              % (s.get("seat_type"), s.get("total", 0), smax))
+    if not save_acks(cfg.ack_file, acks):
+        return 1
+    print("\nNo more alarms for these unless a lot LARGER than what you "
+          "applied for appears.")
+    print("Undo with: --unack")
+    return 0
+
+
+def cmd_unack(cfg):
+    acks = load_acks(cfg.ack_file)
+    if not acks:
+        print("nothing was acknowledged")
+        return 0
+    for sid, a in acks.items():
+        print("cleared: %s (was acknowledged at %s)"
+              % (a.get("seat_type", sid), a.get("at", "?")))
+    if not save_acks(cfg.ack_file, {}):
+        return 1
+    print("\nAlerting restored.")
+    return 0
+
+
 def cmd_status(cfg):
     """Human answer to 'is it actually running?', read from the state file.
 
@@ -968,6 +1051,13 @@ def cmd_status(cfg):
         print("inventory  : nothing listed for trade right now")
     print("watching   : tours=%s want=%d mode=%s"
           % (",".join(cfg.tour_ids), cfg.want, cfg.mode))
+    acks = load_acks(cfg.ack_file)
+    if acks:
+        print("acknowledged (no alarm unless a bigger lot appears):")
+        for a in acks.values():
+            print("   %s  up to %d枚  (acked %s)"
+                  % (a.get("seat_type", "?"), a.get("serial_max", 0),
+                     (a.get("at") or "?")[:16]))
     return 0
 
 
@@ -1026,6 +1116,11 @@ def main():
     g.add_argument("--daemon", action="store_true", help="loop forever")
     g.add_argument("--print", dest="show", action="store_true", help="dump inventory")
     g.add_argument("--test-notify", action="store_true", help="send a test alert")
+    g.add_argument("--ack", action="store_true",
+                   help="I already applied for what is listed -- stop alerting "
+                        "on it unless a bigger lot appears")
+    g.add_argument("--unack", action="store_true",
+                   help="clear all acknowledgements and start alerting again")
     g.add_argument("--status", action="store_true",
                    help="print whether the watcher is alive and what it sees")
     g.add_argument("--healthcheck", action="store_true",
@@ -1055,6 +1150,12 @@ def main():
                "%s/artists/tour/%s" % (BASE, cfg.tour_ids[0]), cfg,
                level="normal")
         return 0
+
+    if args.ack:
+        return cmd_ack(cfg)
+
+    if args.unack:
+        return cmd_unack(cfg)
 
     if args.status:
         return cmd_status(cfg)

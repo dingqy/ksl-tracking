@@ -68,6 +68,11 @@ every daily draw until 9/18.
   long as that listing is up (even if the stock grows), and re-arms only once
   the listing disappears -- so a ticket that comes back rings again.
   `KSL_REPEAT_MIN=30` opts back into periodic re-nagging.
+- **`--ack` once you have applied.** The listing you applied for stays in the
+  pool until the draw, and the pool churns, so even one-alarm-per-episode keeps
+  finding "new" episodes to ring about. `--ack` records the lot size you applied
+  for and goes quiet on it for good -- unless a strictly *larger* lot appears,
+  which is the only thing left worth acting on. `--unack` restores alerting.
 - Every alert carries the countdown to the next 12:00 draw and to the 9/18 deadline
 - Survives the site changing its Inertia asset version (409 → refetches, recovers)
 - Python **standard library only** — no `pip install` on the NAS

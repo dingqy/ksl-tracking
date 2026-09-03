@@ -9,6 +9,8 @@ state.json
 state.json.tmp
 state.cookies
 sim_state.json
+ack_state.json
+*.ack.json
 *.log
 
 __pycache__/
